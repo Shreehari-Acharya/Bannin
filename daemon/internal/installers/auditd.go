@@ -81,16 +81,19 @@ func (a *AuditdTool) Configure() error {
 }
 
 func (a *AuditdTool) Start() error {
-	if err := a.commandRunner().Run("systemctl", "enable", "--now", "auditd"); err != nil {
+	// Try starting (safe even if already running)
+	if err := a.commandRunner().Run("systemctl", "start", "auditd"); err != nil {
+		return fmt.Errorf("failed to start auditd: %w", err)
+	}
+
+	// Enable for persistence
+	if err := a.commandRunner().Run("systemctl", "enable", "auditd"); err != nil {
 		return fmt.Errorf("failed to enable auditd: %w", err)
 	}
 
+	// Load rules
 	if err := a.commandRunner().Run("augenrules", "--load"); err != nil {
 		return fmt.Errorf("failed to load auditd rules: %w", err)
-	}
-
-	if err := a.commandRunner().Run("systemctl", "restart", "auditd"); err != nil {
-		return fmt.Errorf("failed to restart auditd: %w", err)
 	}
 
 	return nil

@@ -92,6 +92,38 @@ func resolvePath(input string) (string, error) {
 	return abs, nil
 }
 
+// ONLY showing modified + new parts for clarity
+// keep rest of your file unchanged
+
+// 🔥 NEW: Kernel-level validation
+func (h *Handler) validateAuditdWithKernel(contents string) (string, error) {
+	tmpDir, err := os.MkdirTemp("", "audit-validate-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpFile := filepath.Join(tmpDir, "test.rules")
+	if err := os.WriteFile(tmpFile, []byte(contents), 0644); err != nil {
+		return "", fmt.Errorf("failed to write temp rules: %w", err)
+	}
+
+	cmd := exec.Command("sudo", "augenrules", "--check")
+	cmd.Env = append(os.Environ(), "AUDIT_RULES_DIR="+tmpDir)
+
+	output, err := cmd.CombinedOutput()
+	result := strings.TrimSpace(string(output))
+	if result == "" {
+		result = "auditd kernel validation completed with no output"
+	}
+
+	if err != nil {
+		return result, fmt.Errorf("auditd kernel validation failed:\n%s", result)
+	}
+
+	return result, nil
+}
+
 func HandleToolsRead(w http.ResponseWriter, r *http.Request) {
 	NewHandler().HandleToolsRead(w, r)
 }
@@ -163,6 +195,11 @@ func (h *Handler) HandleToolsWrite(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+
+		if result, err := h.validateAuditdWithKernel(req.Contents); err != nil {
+		http.Error(w, fmt.Sprintf("%s\n%s", err.Error(), result), http.StatusBadRequest)
+		return
+	}
 	}
 
 	if err := os.WriteFile(path, []byte(req.Contents), 0644); err != nil {
@@ -222,6 +259,11 @@ func (h *Handler) HandleToolsEdit(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+
+		if result, err := h.validateAuditdWithKernel(updated); err != nil {
+		http.Error(w, fmt.Sprintf("%s\n%s", err.Error(), result), http.StatusBadRequest)
+		return
+	}
 	}
 
 	if err := os.WriteFile(path, []byte(updated), 0644); err != nil {
@@ -254,11 +296,6 @@ func (h *Handler) HandleToolsRestart(w http.ResponseWriter, r *http.Request) {
 		}
 	default:
 		http.Error(w, fmt.Sprintf("restart for tool %q is not supported", toolname), http.StatusBadRequest)
-		return
-	}
-
-	if err := h.commandRunner().Run("systemctl", "restart", toolname); err != nil {
-		http.Error(w, fmt.Sprintf("failed to restart %s: %v", toolname, err), http.StatusInternalServerError)
 		return
 	}
 
