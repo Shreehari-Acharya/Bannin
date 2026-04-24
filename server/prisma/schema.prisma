@@ -1,0 +1,28 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum toolname {
+  falco
+  suricata
+  wazuh
+  zeek
+}
+
+model event {
+  id         String   @id @default(uuid())
+  sourceTool toolname 
+  timestamp  DateTime @default(now())
+  priority   String
+  description String
+  rawPayload Json
+  reportUrl   String
+  count      Int      @default(1)
+  askedAnalysis Boolean  @default(false)
+  finished Boolean  @default(false)
+}
