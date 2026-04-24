@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: bannin-dev-postgres
+    environment:
+      POSTGRES_USER: bannin-admin
+      POSTGRES_PASSWORD: bannin-123
+      POSTGRES_DB: bannin_db
+    ports:
+      - "5432:5432"
+  redis:
+    image: redis:8.4-alpine
+    container_name: bannin-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    # Optional: Command to ensure data is saved to disk regularly
+    command: redis-server --save 60 1 --loglevel warning
+  
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: bannin-redis-insight
+    restart: unless-stopped
+    ports:
+      - "5540:5540"
+
