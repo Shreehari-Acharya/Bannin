@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
+import { IBM_Plex_Mono, Space_Grotesk, Inter } from "next/font/google";
 import "./globals.css";
-import Navbar from "@/components/navbar";
+import { cn } from "@/lib/utils";
+import { TooltipProvider } from "@/components/ui/tooltip";
+
+const inter = Inter({subsets:['latin'],variable:'--font-sans'});
 
 const spaceGrotesk = Space_Grotesk({
   variable: "--font-space-grotesk",
@@ -26,13 +29,14 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className={cn("dark", "font-sans", inter.variable)}>
       <body
         className={`${spaceGrotesk.variable} ${plexMono.variable} bg-background font-sans antialiased`}
         suppressHydrationWarning
       >
-        <Navbar />
-        <main>{children}</main>
+        <TooltipProvider>
+          <main>{children}</main>
+        </TooltipProvider>
       </body>
     </html>
   );

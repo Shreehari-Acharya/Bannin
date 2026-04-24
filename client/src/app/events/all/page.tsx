@@ -1,16 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { format } from "date-fns";
-import type { DateRange } from "react-day-picker";
+import { endOfDay, format, startOfDay } from "date-fns";
+import { CalendarIcon } from "lucide-react";
 
+import { Header } from "@/components/header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DateRangePicker } from "@/components/ui/date-range-picker";
+import { Calendar } from "@/components/ui/calendar";
+import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 
-interface Event {
+type SortOrder = "lf" | "of";
+
+interface EventSummary {
   id: string;
   sourceTool: string;
   timestamp: string;
@@ -22,61 +27,128 @@ interface Event {
   finished: boolean;
 }
 
-function parseQueryDate(value: string | null): Date | undefined {
-  if (!value) return undefined;
+const DEFAULT_ROWS = 25;
+const MAX_ROWS = 500;
 
+function parseRows(value: string | null): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (Number.isNaN(parsed) || parsed <= 0) return DEFAULT_ROWS;
+  return Math.min(parsed, MAX_ROWS);
+}
+
+function parseSortOrder(searchParams: Pick<URLSearchParams, "has">): SortOrder {
+  return searchParams.has("of") ? "of" : "lf";
+}
+
+function parseDate(value: string | null): Date | null {
+  if (!value) return null;
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatTimestamp(value: string): string {
+  const parsed = parseDate(value);
+  if (!parsed) return value;
+  return format(parsed, "PPP p");
+}
+
+function getPriorityTone(priority: string): string {
+  const normalized = priority.trim().toLowerCase();
+
+  if (normalized === "critical" || normalized === "high") {
+    return "border-red-500/30 bg-red-500/10 text-red-200";
+  }
+
+  if (normalized === "medium" || normalized === "warning") {
+    return "border-amber-500/30 bg-amber-500/10 text-amber-200";
+  }
+
+  return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
+}
+
+function isHighPriority(priority: string): boolean {
+  const normalized = priority.trim().toLowerCase();
+  return normalized === "critical" || normalized === "high";
 }
 
 export default function EventsAllPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [range, setRange] = useState<DateRange | undefined>({
-    from: parseQueryDate(searchParams.get("start")),
-    to: parseQueryDate(searchParams.get("end")),
+  const [startDate, setStartDate] = useState<Date | undefined>(() => {
+    const parsed = parseDate(searchParams.get("start"));
+    return parsed ?? undefined;
   });
-  const [rows, setRows] = useState(Number(searchParams.get("rows")) || 10);
-  const [sortOrder, setSortOrder] = useState<"lf" | "of">(
-    searchParams.has("of") ? "of" : "lf",
-  );
+  const [endDate, setEndDate] = useState<Date | undefined>(() => {
+    const parsed = parseDate(searchParams.get("end"));
+    return parsed ?? undefined;
+  });
+  const [rows, setRows] = useState<number>(() => parseRows(searchParams.get("rows")));
+  const [sortOrder, setSortOrder] = useState<SortOrder>(() => parseSortOrder(searchParams));
+  const [timeZone, setTimeZone] = useState<string | undefined>(undefined);
 
-  const [events, setEvents] = useState<Event[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [events, setEvents] = useState<EventSummary[]>([]);
+  const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const stopPolling = useCallback(() => {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
-  }, []);
-
-  const doFetch = useCallback(async (showLoading = true) => {
-    if (showLoading) {
-      setLoading(true);
-      setError(null);
-    }
-    try {
-      const res = await fetch(`/api/events/all?${searchParams.toString()}`);
-      if (!res.ok) throw new Error(`Request failed (${res.status})`);
-      setEvents(await res.json());
-    } catch (err) {
-      if (showLoading) {
-        setError(err instanceof Error ? err.message : "Something went wrong");
-      }
-    } finally {
-      if (showLoading) {
-        setLoading(false);
-      }
-    }
-  }, [searchParams]);
+  const queryString = searchParams.toString();
 
   useEffect(() => {
-    void doFetch(true);
-  }, [doFetch, searchParams]);
+    setTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  }, []);
+
+  useEffect(() => {
+    setStartDate(parseDate(searchParams.get("start")) ?? undefined);
+    setEndDate(parseDate(searchParams.get("end")) ?? undefined);
+    setRows(parseRows(searchParams.get("rows")));
+    setSortOrder(parseSortOrder(searchParams));
+  }, [queryString, searchParams]);
+
+  const stopPolling = useCallback(() => {
+    if (!pollingRef.current) return;
+    clearInterval(pollingRef.current);
+    pollingRef.current = null;
+  }, []);
+
+  const fetchEvents = useCallback(
+    async (showLoading = true) => {
+      if (showLoading) {
+        setLoading(true);
+        setError(null);
+      }
+
+      const endpoint = queryString ? `/api/events/all?${queryString}` : "/api/events/all";
+
+      try {
+        const res = await fetch(endpoint);
+        if (!res.ok) throw new Error(`Request failed (${res.status})`);
+
+        const payload = await res.json();
+        if (Array.isArray(payload)) {
+          setEvents(payload as EventSummary[]);
+        } else {
+          setEvents([]);
+        }
+        setLastUpdated(new Date());
+      } catch (fetchError) {
+        if (showLoading) {
+          setError(fetchError instanceof Error ? fetchError.message : "Failed to fetch events");
+        }
+      } finally {
+        if (showLoading) {
+          setLoading(false);
+        }
+      }
+    },
+    [queryString],
+  );
+
+  useEffect(() => {
+    void fetchEvents(true);
+  }, [fetchEvents]);
 
   useEffect(() => {
     if (loading) return;
@@ -90,231 +162,313 @@ export default function EventsAllPage() {
     if (pollingRef.current) return;
 
     pollingRef.current = setInterval(() => {
-      void doFetch(false);
+      void fetchEvents(false);
     }, 5000);
 
     return stopPolling;
-  }, [events, loading, doFetch, stopPolling]);
+  }, [events, loading, fetchEvents, stopPolling]);
 
   useEffect(() => stopPolling, [stopPolling]);
 
-  function applyFilters() {
-    if (!range?.from || !range?.to) {
-      setError("Please select a start and end date.");
-      return;
+  const stats = useMemo(() => {
+    const total = events.length;
+    const critical = events.filter((event) => isHighPriority(event.priority)).length;
+    const pending = events.filter((event) => event.askedAnalysis && !event.finished).length;
+    const reports = events.filter((event) => event.reportUrl).length;
+
+    return { total, critical, pending, reports };
+  }, [events]);
+
+  const applyFilters = useCallback(() => {
+    const params = new URLSearchParams();
+
+    if (startDate) {
+      params.set("start", format(startOfDay(startDate), "yyyy-MM-dd'T'HH:mm"));
     }
 
-    const startDate = new Date(range.from);
-    startDate.setHours(0, 0, 0, 0);
+    if (endDate) {
+      params.set("end", format(endOfDay(endDate), "yyyy-MM-dd'T'HH:mm"));
+    }
 
-    const endDate = new Date(range.to);
-    endDate.setHours(23, 59, 0, 0);
-
-    const params = new URLSearchParams();
-    params.set("start", format(startDate, "yyyy-MM-dd'T'HH:mm"));
-    params.set("end", format(endDate, "yyyy-MM-dd'T'HH:mm"));
-    params.set("rows", String(rows));
+    params.set("rows", String(Math.min(Math.max(rows || DEFAULT_ROWS, 1), MAX_ROWS)));
     params.set(sortOrder, "true");
-    router.push(`/events/all?${params.toString()}`);
-  }
 
-  function priorityColor(priority: string) {
-    if (priority === "Critical") return "border-rose-400/20 bg-rose-400/10 text-rose-100";
-    if (priority === "Medium") return "border-amber-400/20 bg-amber-400/10 text-amber-100";
-    return "border-emerald-400/20 bg-emerald-400/10 text-emerald-100";
-  }
+    const next = params.toString();
+    router.push(next ? `/events/all?${next}` : "/events/all");
+  }, [endDate, rows, router, sortOrder, startDate]);
 
-  const summaries = {
-    total: events.length,
-    critical: events.filter((event) => event.priority === "Critical").length,
-    pending: events.filter((event) => event.askedAnalysis && !event.finished).length,
-    ready: events.filter((event) => event.reportUrl).length,
-  };
-
-  if (loading) {
-    return (
-      <div className="flex min-h-[70vh] items-center justify-center px-4">
-        <div className="rounded-3xl border border-white/10 bg-white/5 px-6 py-4 text-sm text-slate-300 shadow-2xl shadow-black/20 backdrop-blur-xl">
-          Loading incident feed…
-        </div>
-      </div>
-    );
-  }
+  const clearFilters = useCallback(() => {
+    setStartDate(undefined);
+    setEndDate(undefined);
+    setRows(DEFAULT_ROWS);
+    setSortOrder("lf");
+    router.push("/events/all");
+  }, [router]);
 
   return (
-    <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
-      <div className="mb-8 flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
-        <div className="max-w-3xl space-y-4">
-          <Badge variant="outline" className="w-fit border-cyan-400/20 bg-cyan-400/10 text-cyan-100">
-            Incident feed
-          </Badge>
-          <h1 className="text-balance text-4xl font-semibold text-white sm:text-5xl">
-            Scan, filter, and open every incident without leaving the dashboard.
-          </h1>
-          <p className="max-w-2xl text-base leading-8 text-slate-300">
-            The same event API still powers the app, but the surface is now laid out
-            like an operations console with clearer filters, status states, and
-            faster scanability.
-          </p>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[28rem]">
-          {[
-            { label: "Total", value: summaries.total },
-            { label: "Critical", value: summaries.critical },
-            { label: "Pending analysis", value: summaries.pending },
-            { label: "Reports ready", value: summaries.ready },
-          ].map((item) => (
-            <div key={item.label} className="rounded-3xl border border-white/10 bg-white/5 p-4 shadow-lg shadow-black/20 backdrop-blur-xl">
-              <p className="text-xs uppercase tracking-[0.32em] text-slate-400">{item.label}</p>
-              <p className="mt-2 text-3xl font-semibold text-white">{item.value}</p>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className="mb-6 rounded-3xl border border-white/10 bg-white/5 p-5 shadow-2xl shadow-black/20 backdrop-blur-xl">
-        {error && (
-          <div className="mb-5 rounded-2xl border border-rose-400/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
-            {error}
-          </div>
+    <div className="relative flex min-h-screen flex-col overflow-hidden px-4 supports-[overflow:clip]:overflow-clip">
+      <Header />
+      <main
+        className={cn(
+          "relative mx-auto w-full max-w-4xl grow pb-14",
+          "before:absolute before:-inset-y-14 before:-left-px before:w-px before:bg-border",
+          "after:absolute after:-inset-y-14 after:-right-px after:w-px after:bg-border",
         )}
-        <div className="grid gap-4 xl:grid-cols-[1.2fr_auto_auto_auto_auto] xl:items-end">
+      >
+        <section className="flex flex-col gap-5 px-4 py-8 md:px-6 md:py-10">
           <div className="flex flex-col gap-2">
-            <label className="text-xs font-medium uppercase tracking-[0.28em] text-slate-400">
-              Range calendar
-            </label>
-            <DateRangePicker
-              value={range}
-              onChange={(nextRange) => {
-                setRange(nextRange);
-                if (error) setError(null);
-              }}
-            />
+            <div className="flex items-center justify-between gap-3">
+              <h1 className="text-balance text-2xl text-foreground md:text-3xl">Incident Dashboard</h1>
+              <Badge variant="secondary" className="border-border bg-card/70 text-foreground">
+                {lastUpdated ? `Updated ${format(lastUpdated, "p")}` : "Awaiting data"}
+              </Badge>
+            </div>
+            <p className="text-muted-foreground text-sm tracking-wide md:text-base">
+              Live event stream with analysis status and report readiness.
+            </p>
           </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-xs font-medium uppercase tracking-[0.28em] text-slate-400">
-              Rows
-            </label>
-            <input
-              type="number"
-              min={1}
-              value={rows}
-              onChange={(e) => setRows(Number(e.target.value))}
-              className="h-12 w-28 rounded-2xl border border-white/10 bg-white/5 px-4 text-sm text-white outline-none placeholder:text-slate-500 focus:border-cyan-400/40"
-            />
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {[
+              { label: "Total events", value: stats.total },
+              { label: "High/Critical", value: stats.critical },
+              { label: "Pending analysis", value: stats.pending },
+              { label: "Reports ready", value: stats.reports },
+            ].map((item) => (
+              <article
+                key={item.label}
+                className="rounded-sm border border-border/80 bg-card/70 px-4 py-3 shadow-sm backdrop-blur"
+              >
+                <p className="text-muted-foreground text-xs uppercase tracking-[0.18em]">{item.label}</p>
+                <p className="mt-2 text-3xl text-foreground">{item.value}</p>
+              </article>
+            ))}
           </div>
-          <div className="flex flex-col gap-2">
-            <label className="text-xs font-medium uppercase tracking-[0.28em] text-slate-400">
-              Sort order
-            </label>
-            <div className="inline-flex h-12 rounded-2xl border border-white/10 bg-white/5 p-1">
-              <button
-                type="button"
-                onClick={() => setSortOrder("lf")}
-                aria-pressed={sortOrder === "lf"}
-                className={cn(
-                  "rounded-[0.85rem] px-4 text-sm font-medium transition-colors",
-                  sortOrder === "lf"
-                    ? "bg-cyan-400 text-slate-950 shadow-lg shadow-cyan-500/20"
-                    : "text-slate-300 hover:bg-white/8 hover:text-white",
-                )}
-              >
-                Latest first
-              </button>
-              <button
-                type="button"
-                onClick={() => setSortOrder("of")}
-                aria-pressed={sortOrder === "of"}
-                className={cn(
-                  "rounded-[0.85rem] px-4 text-sm font-medium transition-colors",
-                  sortOrder === "of"
-                    ? "bg-cyan-400 text-slate-950 shadow-lg shadow-cyan-500/20"
-                    : "text-slate-300 hover:bg-white/8 hover:text-white",
-                )}
-              >
-                Oldest first
-              </button>
+
+          <div className="rounded-sm border border-border/80 bg-card/70 p-4 shadow-sm backdrop-blur">
+            <div className="grid gap-3 lg:grid-cols-5">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-muted-foreground text-xs tracking-wide" htmlFor="start-at">
+                  Start
+                </label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      id="start-at"
+                      variant="outline"
+                      className={cn(
+                        "h-9 w-full min-w-0 justify-start border-input bg-background/75 px-3 text-left font-normal",
+                        !startDate && "text-muted-foreground",
+                      )}
+                    >
+                      <CalendarIcon data-icon="inline-start" />
+                      <span className="truncate">
+                        {startDate ? format(startDate, "PPP") : "Start date"}
+                      </span>
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-auto p-0">
+                    <Calendar
+                      mode="single"
+                      selected={startDate}
+                      onSelect={(date) => {
+                        setStartDate(date);
+                        if (date && endDate && date > endDate) {
+                          setEndDate(undefined);
+                        }
+                      }}
+                      disabled={(date) => (endDate ? date > endDate : false)}
+                      timeZone={timeZone}
+                      initialFocus
+                      className="rounded-sm border border-border/80 bg-card/90"
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-muted-foreground text-xs tracking-wide" htmlFor="end-at">
+                  End
+                </label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      id="end-at"
+                      variant="outline"
+                      className={cn(
+                        "h-9 w-full min-w-0 justify-start border-input bg-background/75 px-3 text-left font-normal",
+                        !endDate && "text-muted-foreground",
+                      )}
+                    >
+                      <CalendarIcon data-icon="inline-start" />
+                      <span className="truncate">
+                        {endDate ? format(endDate, "PPP") : "End date"}
+                      </span>
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-auto p-0">
+                    <Calendar
+                      mode="single"
+                      selected={endDate}
+                      onSelect={setEndDate}
+                      disabled={(date) => (startDate ? date < startDate : false)}
+                      timeZone={timeZone}
+                      initialFocus
+                      className="rounded-sm border border-border/80 bg-card/90"
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-muted-foreground text-xs tracking-wide" htmlFor="row-limit">
+                  Rows (max 500)
+                </label>
+                <Input
+                  id="row-limit"
+                  type="number"
+                  min={1}
+                  max={MAX_ROWS}
+                  value={rows}
+                  onChange={(event) => setRows(parseRows(event.target.value))}
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <span className="text-muted-foreground text-xs tracking-wide">Sort</span>
+                <div className="flex h-9 min-w-0 rounded-sm border border-input bg-background/75 p-1">
+                  <button
+                    type="button"
+                    className={cn(
+                      "min-w-0 flex-1 truncate rounded-xs px-2 text-xs transition-colors",
+                      sortOrder === "lf"
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                    onClick={() => setSortOrder("lf")}
+                  >
+                    Latest
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "min-w-0 flex-1 truncate rounded-xs px-2 text-xs transition-colors",
+                      sortOrder === "of"
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                    onClick={() => setSortOrder("of")}
+                  >
+                    Oldest
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 items-end gap-2">
+                <Button className="min-w-0 w-full" onClick={applyFilters}>
+                  Apply
+                </Button>
+                <Button className="min-w-0 w-full" variant="outline" onClick={clearFilters}>
+                  Reset
+                </Button>
+              </div>
             </div>
           </div>
-          <Button onClick={applyFilters} className="h-12 px-6">
-            Fetch events
-          </Button>
-        </div>
-      </div>
 
-      {events.length > 0 ? (
-        <div className="overflow-hidden rounded-3xl border border-white/10 bg-slate-950/75 shadow-2xl shadow-black/20 backdrop-blur-xl">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b border-white/10 bg-white/5 text-xs uppercase tracking-[0.22em] text-slate-400">
-                <tr>
-                  <th className="px-5 py-4">Source</th>
-                  <th className="px-5 py-4">Timestamp</th>
-                  <th className="px-5 py-4">Priority</th>
-                  <th className="px-5 py-4">Description</th>
-                  <th className="px-5 py-4 text-center">Occurrences</th>
-                  <th className="px-5 py-4 text-center">Analysis</th>
-                  <th className="px-5 py-4 text-center">Report</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/8">
-                {events.map((event) => (
-                  <tr
-                    key={event.id}
-                    onClick={() => router.push(`/event/${event.id}`)}
-                    className="cursor-pointer bg-transparent transition-colors hover:bg-white/5"
-                  >
-                    <td className="whitespace-nowrap px-5 py-4 font-medium text-white">
-                      {event.sourceTool}
-                    </td>
-                    <td className="whitespace-nowrap px-5 py-4 text-slate-400">
-                      {new Date(event.timestamp).toLocaleString()}
-                    </td>
-                    <td className="px-5 py-4">
-                      <span className={cn("inline-flex rounded-full border px-3 py-1 text-xs font-medium", priorityColor(event.priority))}>
-                        {event.priority}
-                      </span>
-                    </td>
-                    <td className="max-w-[28rem] px-5 py-4 text-slate-300">
-                      <span className="line-clamp-2">{event.description}</span>
-                    </td>
-                    <td className="whitespace-nowrap px-5 py-4 text-center text-slate-300">
-                      {event.count}
-                    </td>
-                    <td className="whitespace-nowrap px-5 py-4 text-center">
-                      <span className={cn("inline-flex rounded-full border px-3 py-1 text-xs font-medium", event.askedAnalysis ? "border-cyan-400/20 bg-cyan-400/10 text-cyan-100" : "border-white/10 bg-white/5 text-slate-400")}>
-                        {event.askedAnalysis ? "Requested" : "Idle"}
-                      </span>
-                    </td>
-                    <td className="whitespace-nowrap px-5 py-4 text-center">
-                      {event.reportUrl ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          asChild
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <a href={event.reportUrl} target="_blank" rel="noreferrer">
-                            View
-                          </a>
-                        </Button>
-                      ) : (
-                        <span className="text-slate-500">—</span>
-                      )}
-                    </td>
+          {error ? (
+            <div className="rounded-sm border border-destructive/40 bg-destructive/10 px-4 py-3 text-destructive text-sm">
+              {error}
+            </div>
+          ) : null}
+
+          <div className="overflow-hidden rounded-sm border border-border/80 bg-card/70 shadow-sm backdrop-blur">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[980px] text-sm">
+                <thead>
+                  <tr className="border-b border-border/80 bg-muted/20 text-left text-muted-foreground text-xs">
+                    <th className="px-4 py-3 font-medium">Source</th>
+                    <th className="px-4 py-3 font-medium">Timestamp</th>
+                    <th className="px-4 py-3 font-medium">Priority</th>
+                    <th className="px-4 py-3 font-medium">Description</th>
+                    <th className="px-4 py-3 text-center font-medium">Count</th>
+                    <th className="px-4 py-3 text-center font-medium">Analysis</th>
+                    <th className="px-4 py-3 text-center font-medium">Report</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {loading ? (
+                    <tr>
+                      <td className="px-4 py-8 text-center text-muted-foreground" colSpan={7}>
+                        Loading incidents...
+                      </td>
+                    </tr>
+                  ) : events.length === 0 ? (
+                    <tr>
+                      <td className="px-4 py-8 text-center text-muted-foreground" colSpan={7}>
+                        No incidents found for the current filters.
+                      </td>
+                    </tr>
+                  ) : (
+                    events.map((event) => (
+                      <tr
+                        key={event.id}
+                        className="cursor-pointer border-b border-border/70 transition-colors hover:bg-muted/15"
+                        onClick={() => router.push(`/event/${event.id}`)}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="text-foreground font-medium">{event.sourceTool}</div>
+                          <div className="text-muted-foreground text-xs">{event.id}</div>
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">{formatTimestamp(event.timestamp)}</td>
+                        <td className="px-4 py-3">
+                          <Badge variant="outline" className={cn("border", getPriorityTone(event.priority))}>
+                            {event.priority}
+                          </Badge>
+                        </td>
+                        <td className="max-w-[34rem] px-4 py-3 text-muted-foreground">
+                          <p className="line-clamp-2">{event.description}</p>
+                        </td>
+                        <td className="px-4 py-3 text-center text-foreground">{event.count}</td>
+                        <td className="px-4 py-3 text-center">
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "border",
+                              event.askedAnalysis
+                                ? event.finished
+                                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+                                  : "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                                : "border-border bg-muted text-muted-foreground",
+                            )}
+                          >
+                            {event.askedAnalysis ? (event.finished ? "Completed" : "In Progress") : "Idle"}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {event.reportUrl ? (
+                            <Button
+                              asChild
+                              onClick={(eventClick) => eventClick.stopPropagation()}
+                              size="sm"
+                              variant="outline"
+                            >
+                              <a href={event.reportUrl} rel="noreferrer" target="_blank">
+                                View
+                              </a>
+                            </Button>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">Unavailable</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
-      ) : (
-        !error && (
-          <div className="rounded-3xl border border-white/10 bg-white/5 px-6 py-14 text-center text-sm text-slate-400 shadow-2xl shadow-black/20 backdrop-blur-xl">
-            No incidents match the selected filters.
-          </div>
-        )
-      )}
+        </section>
+      </main>
     </div>
   );
 }
