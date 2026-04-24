@@ -19,15 +19,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-var backendURL = os.Getenv("BANNIN_BACKEND_URL")
+const backendURL = "http://localhost:4000"
 
 func main() {
+	fmt.Printf("backend URL configured as %s\n", backendURL)
+
 	if len(os.Args) > 1 && os.Args[1] == "init" {
 		if err := startAgentAPIServer(); err != nil {
 			fmt.Printf("fatal error starting Agent API server: %v\n", err)
 			os.Exit(1)
 		}
-		runInstallerUI()
+		runInstallerUI(backendURL)
 		return
 	}
 
@@ -45,11 +47,6 @@ func main() {
 
 	go func() {
 		for alert := range eventQueue {
-			if backendURL == "" {
-				fmt.Println("BANNIN_BACKEND_URL not configured; skipping alert dispatch")
-				continue
-			}
-
 			if err := dispatcher.SendAlerts(alert, backendURL); err != nil {
 				fmt.Printf("error sending alert: %v\n", err)
 				continue
@@ -101,7 +98,7 @@ func startAgentAPIServer() error {
 	return nil
 }
 
-func runInstallerUI() {
+func runInstallerUI(backendURL string) {
 	tools := []installers.SecurityTools{
 		installers.NewFalcoTool(),
 	}
