@@ -440,7 +440,7 @@ func (m model) viewIntro() string {
 		accentStyle.Render("What this setup does"),
 		"  • installs auditd if it is missing",
 		"  • writes `/etc/audit/rules.d/bannin.rules`",
-		"  • can request rule generation from `BANNIN_BACKEND_URL`",
+		"  • can request rule generation from bannin agents",
 		"  • tails `/var/log/audit/audit.log` and forwards events",
 		"  • can restart auditd after rule changes",
 		"",
