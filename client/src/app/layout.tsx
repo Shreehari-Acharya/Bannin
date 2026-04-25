@@ -3,6 +3,7 @@ import { IBM_Plex_Mono, Space_Grotesk, Inter } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { QueryProvider } from "@/components/query-provider";
 
 const inter = Inter({subsets:['latin'],variable:'--font-sans'});
 
@@ -29,14 +30,20 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={cn("dark", "font-sans", inter.variable)}>
+    <html
+      lang="en"
+      className={cn("dark", "font-sans", inter.variable)}
+      data-scroll-behavior="smooth"
+    >
       <body
         className={`${spaceGrotesk.variable} ${plexMono.variable} bg-background font-sans antialiased`}
         suppressHydrationWarning
       >
-        <TooltipProvider>
-          <main>{children}</main>
-        </TooltipProvider>
+        <QueryProvider>
+          <TooltipProvider>
+            <main>{children}</main>
+          </TooltipProvider>
+        </QueryProvider>
       </body>
     </html>
   );

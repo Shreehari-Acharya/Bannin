@@ -32,7 +32,7 @@ interface Event {
 
 ## 3) Backend APIs (Express: `server/src/index.ts`)
 
-Base URL is backend origin (`PORT`, default in code is `6000`).
+Base URL is backend origin (`PORT`, default in code is `4000`).
 
 ### Health
 
@@ -179,7 +179,7 @@ Files:
 Env requirement:
 
 ```bash
-BACKEND_URL=http://localhost:6000
+BACKEND_URL=http://localhost:4000
 ```
 
 ## 5) Current frontend usage patterns
@@ -188,18 +188,20 @@ BACKEND_URL=http://localhost:6000
 
 Fetch pattern:
 
-- fetches from `/api/events/all?${searchParams}`
+- uses TanStack Query (`@tanstack/react-query`) with key `["events", "all", queryString]`
+- query fn fetches `/api/events/all?${searchParams}`
 - supports filters: date range, rows, sort (`lf`/`of`)
 
 Rendering:
 
 - table columns: source, timestamp, priority, description, count, analysis state, report link
 - row click navigates to `/event/{id}`
+- live chart card (`recharts`) visualizes attack volume, high/critical count, and pending analysis trend
 
 Polling:
 
-- if any event is `askedAnalysis && !finished`, polls full list every 5 seconds
-- stops when no pending events remain
+- automatic refetch every 5 seconds (`refetchInterval: 5000`)
+- keeps a local rolling trend history for charting
 
 ## `/event/[id]` page (`client/src/app/event/[id]/page.tsx`)
 
@@ -282,14 +284,12 @@ These are used by backend agents/services (`server/src/services/daemonToolsClien
 
 ## 9) Config gotchas to keep in mind during refactor
 
-There are port/base URL mismatches across files. Verify these before testing UI:
+Current local-development defaults (aligned):
 
-- `server/src/config/env.ts` default backend port: `6000`
-- `server/.env.example` shows `PORT=3000`
-- `client/.env.example` points to `http://localhost:6000`
+- `server/src/config/env.ts` default backend port: `4000`
+- `server/.env.example` shows `PORT=4000`
+- `client/.env.example` points to `http://localhost:4000`
 - `daemon/cmd/daemon/main.go` hardcodes backend URL as `http://localhost:4000`
-
-Use one consistent backend origin for local development to avoid confusing API failures.
 
 ---
 

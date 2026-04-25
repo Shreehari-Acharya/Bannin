@@ -23,25 +23,34 @@ export const navLinks = [
   },
 ];
 
-export function Header() {
+interface HeaderProps {
+  fullWidth?: boolean;
+}
+
+export function Header({ fullWidth = false }: HeaderProps) {
   const pathname = usePathname();
   const scrolled = useScroll(10);
 
   return (
     <header
       className={cn(
-        "sticky top-0 z-50 mx-auto w-full max-w-4xl border-transparent border-b md:rounded-md md:border md:transition-all md:ease-out",
+        "sticky top-0 z-50 w-full border-transparent border-b md:transition-all md:ease-out",
+        !fullWidth && "mx-auto max-w-4xl md:rounded-md md:border",
         {
-          "border-border bg-background/95 backdrop-blur-sm supports-backdrop-filter:bg-background/50 md:top-2 md:max-w-3xl md:shadow":
-            scrolled,
+          "border-border bg-background/95 backdrop-blur-sm supports-backdrop-filter:bg-background/50":
+            scrolled || fullWidth,
+          "md:top-2 md:max-w-3xl md:shadow": scrolled && !fullWidth,
+          "md:shadow": scrolled && fullWidth,
         },
       )}
     >
       <nav
         className={cn(
           "flex h-14 w-full items-center justify-between px-4 md:h-12 md:transition-all md:ease-out",
+          fullWidth && "md:px-8 lg:px-12",
           {
-            "md:px-2": scrolled,
+            "md:px-2": scrolled && !fullWidth,
+            "md:px-8 lg:px-12": scrolled && fullWidth,
           },
         )}
       >

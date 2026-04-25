@@ -26,7 +26,7 @@ export const mockEvents: MockEvent[] = [
       alert: {
         signature_id: 1001,
         signature: "SQL Injection attempt",
-        category: "Web Application Attack",
+        category: "Web Application Alert",
         severity: 1,
       },
       src_ip: "198.51.100.22",
@@ -188,7 +188,7 @@ export const mockEvents: MockEvent[] = [
       },
       messages: [
         {
-          message: "XSS Attack Detected via libinjection",
+          message: "XSS Alert Detected via libinjection",
           ruleId: 941100,
           severity: "CRITICAL",
         },
@@ -625,7 +625,7 @@ export const mockEvents: MockEvent[] = [
       },
       messages: [
         {
-          message: "Path Traversal Attack (/../)",
+          message: "Path Traversal Alert (/../)",
           ruleId: 930100,
           severity: "CRITICAL",
         },
@@ -752,7 +752,7 @@ export const mockEvents: MockEvent[] = [
     sourceTool: "Snort",
     timestamp: "2026-03-06T01:55:48Z",
     priority: "Medium",
-    description: "Brute force attack detected on RDP service 10.0.1.5:3389",
+    description: "Brute force alert detected on RDP service 10.0.1.5:3389",
     reportUrl: "",
     count: 230,
     askedAnalysis: true,

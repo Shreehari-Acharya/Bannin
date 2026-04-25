@@ -1,9 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { endOfDay, format, startOfDay } from "date-fns";
 import { CalendarIcon } from "lucide-react";
+import {
+  Brush,
+  CartesianGrid,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { Header } from "@/components/header";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +25,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 
 type SortOrder = "lf" | "of";
+type EventsApiError = { error?: unknown };
 
 interface EventSummary {
   id: string;
@@ -27,8 +39,22 @@ interface EventSummary {
   finished: boolean;
 }
 
+interface AlertTrendPoint {
+  sampledAt: number;
+  sampledAtLabel: string;
+  events: number;
+  alerts: number;
+  rawEvents: number;
+  rawAlerts: number;
+}
+
 const DEFAULT_ROWS = 25;
 const MAX_ROWS = 500;
+const REFRESH_INTERVAL_MS = 5_000;
+const MAX_TREND_POINTS = 36;
+const IDLE_DECAY_RATIO = 0.18;
+const CHART_MIN_WIDTH_PX = 680;
+const CHART_POINT_WIDTH_PX = 44;
 
 function parseRows(value: string | null): number {
   const parsed = Number.parseInt(value ?? "", 10);
@@ -56,7 +82,7 @@ function getPriorityTone(priority: string): string {
   const normalized = priority.trim().toLowerCase();
 
   if (normalized === "critical" || normalized === "high") {
-    return "border-red-500/30 bg-red-500/10 text-red-200";
+    return "border-sky-500/30 bg-sky-500/10 text-sky-200";
   }
 
   if (normalized === "medium" || normalized === "warning") {
@@ -66,9 +92,39 @@ function getPriorityTone(priority: string): string {
   return "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
 }
 
-function isHighPriority(priority: string): boolean {
-  const normalized = priority.trim().toLowerCase();
-  return normalized === "critical" || normalized === "high";
+function decayValue(value: number): number {
+  if (value <= 0) return 0;
+  const drop = Math.max(1, Math.round(value * IDLE_DECAY_RATIO));
+  return Math.max(0, value - drop);
+}
+
+async function fetchEvents(
+  queryString: string,
+  signal?: AbortSignal,
+): Promise<EventSummary[]> {
+  const endpoint = queryString ? `/api/events/all?${queryString}` : "/api/events/all";
+  const res = await fetch(endpoint, { signal });
+
+  let payload: unknown = null;
+  try {
+    payload = await res.json();
+  } catch {
+    payload = null;
+  }
+
+  if (!res.ok) {
+    const message =
+      payload &&
+      typeof payload === "object" &&
+      "error" in payload &&
+      typeof (payload as EventsApiError).error === "string"
+        ? (payload as EventsApiError).error
+        : `Request failed (${res.status})`;
+
+    throw new Error(message);
+  }
+
+  return Array.isArray(payload) ? (payload as EventSummary[]) : [];
 }
 
 export default function EventsAllPage() {
@@ -85,99 +141,93 @@ export default function EventsAllPage() {
   });
   const [rows, setRows] = useState<number>(() => parseRows(searchParams.get("rows")));
   const [sortOrder, setSortOrder] = useState<SortOrder>(() => parseSortOrder(searchParams));
-  const [timeZone, setTimeZone] = useState<string | undefined>(undefined);
-
-  const [events, setEvents] = useState<EventSummary[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [timeZone] = useState<string>(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [trendHistory, setTrendHistory] = useState<AlertTrendPoint[]>([]);
 
   const queryString = searchParams.toString();
 
   useEffect(() => {
-    setTimeZone(Intl.DateTimeFormat().resolvedOptions().timeZone);
-  }, []);
-
-  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setStartDate(parseDate(searchParams.get("start")) ?? undefined);
     setEndDate(parseDate(searchParams.get("end")) ?? undefined);
     setRows(parseRows(searchParams.get("rows")));
     setSortOrder(parseSortOrder(searchParams));
   }, [queryString, searchParams]);
 
-  const stopPolling = useCallback(() => {
-    if (!pollingRef.current) return;
-    clearInterval(pollingRef.current);
-    pollingRef.current = null;
-  }, []);
+  const eventsQuery = useQuery({
+    queryKey: ["events", "all", queryString],
+    queryFn: ({ signal }) => fetchEvents(queryString, signal),
+    refetchInterval: REFRESH_INTERVAL_MS,
+    refetchIntervalInBackground: true,
+  });
 
-  const fetchEvents = useCallback(
-    async (showLoading = true) => {
-      if (showLoading) {
-        setLoading(true);
-        setError(null);
-      }
-
-      const endpoint = queryString ? `/api/events/all?${queryString}` : "/api/events/all";
-
-      try {
-        const res = await fetch(endpoint);
-        if (!res.ok) throw new Error(`Request failed (${res.status})`);
-
-        const payload = await res.json();
-        if (Array.isArray(payload)) {
-          setEvents(payload as EventSummary[]);
-        } else {
-          setEvents([]);
-        }
-        setLastUpdated(new Date());
-      } catch (fetchError) {
-        if (showLoading) {
-          setError(fetchError instanceof Error ? fetchError.message : "Failed to fetch events");
-        }
-      } finally {
-        if (showLoading) {
-          setLoading(false);
-        }
-      }
-    },
-    [queryString],
-  );
-
-  useEffect(() => {
-    void fetchEvents(true);
-  }, [fetchEvents]);
-
-  useEffect(() => {
-    if (loading) return;
-
-    const hasPendingAnalysis = events.some((event) => event.askedAnalysis && !event.finished);
-    if (!hasPendingAnalysis) {
-      stopPolling();
-      return;
-    }
-
-    if (pollingRef.current) return;
-
-    pollingRef.current = setInterval(() => {
-      void fetchEvents(false);
-    }, 5000);
-
-    return stopPolling;
-  }, [events, loading, fetchEvents, stopPolling]);
-
-  useEffect(() => stopPolling, [stopPolling]);
+  const events = useMemo(() => eventsQuery.data ?? [], [eventsQuery.data]);
+  const loading = eventsQuery.isPending && !eventsQuery.data;
+  const error = eventsQuery.error instanceof Error ? eventsQuery.error.message : null;
+  const lastUpdated = eventsQuery.dataUpdatedAt ? new Date(eventsQuery.dataUpdatedAt) : null;
+  const isRefreshing = eventsQuery.isFetching && !loading;
 
   const stats = useMemo(() => {
     const total = events.length;
-    const critical = events.filter((event) => isHighPriority(event.priority)).length;
-    const pending = events.filter((event) => event.askedAnalysis && !event.finished).length;
     const reports = events.filter((event) => event.reportUrl).length;
 
-    return { total, critical, pending, reports };
+    return { total, reports };
   }, [events]);
+
+  const totalAlertCount = useMemo(
+    () =>
+      events.reduce((sum, event) => {
+        const next = Number.isFinite(event.count) ? event.count : 0;
+        return sum + next;
+      }, 0),
+    [events],
+  );
+
+  useEffect(() => {
+    if (!eventsQuery.dataUpdatedAt) return;
+
+    const sampledAt = eventsQuery.dataUpdatedAt;
+    const sampledAtLabel = format(sampledAt, "HH:mm:ss");
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setTrendHistory((previous) => {
+      const last = previous[previous.length - 1];
+      if (last && last.sampledAt === sampledAt) {
+        return previous;
+      }
+
+      const hasSignals = stats.total > 0 || totalAlertCount > 0;
+      const noRawGrowth =
+        !!last &&
+        totalAlertCount <= last.rawAlerts &&
+        stats.total <= last.rawEvents;
+
+      const shouldDecay = !!last && (!hasSignals || noRawGrowth);
+
+      const events = shouldDecay && last ? decayValue(last.events) : stats.total;
+      const alerts = totalAlertCount <= 0 ? 0 : shouldDecay && last ? decayValue(last.alerts) : totalAlertCount;
+
+      const point: AlertTrendPoint = {
+        sampledAt,
+        sampledAtLabel,
+        events,
+        alerts,
+        rawEvents: stats.total,
+        rawAlerts: totalAlertCount,
+      };
+
+      return [...previous, point].slice(-MAX_TREND_POINTS);
+    });
+  }, [
+    eventsQuery.dataUpdatedAt,
+    stats.total,
+    totalAlertCount,
+  ]);
+
+  const chartWidth = useMemo(
+    () => Math.max(CHART_MIN_WIDTH_PX, trendHistory.length * CHART_POINT_WIDTH_PX),
+    [trendHistory.length],
+  );
 
   const applyFilters = useCallback(() => {
     const params = new URLSearchParams();
@@ -207,20 +257,18 @@ export default function EventsAllPage() {
 
   return (
     <div className="relative flex min-h-screen flex-col overflow-hidden px-4 supports-[overflow:clip]:overflow-clip">
-      <Header />
-      <main
-        className={cn(
-          "relative mx-auto w-full max-w-4xl grow pb-14",
-          "before:absolute before:-inset-y-14 before:-left-px before:w-px before:bg-border",
-          "after:absolute after:-inset-y-14 after:-right-px after:w-px after:bg-border",
-        )}
-      >
-        <section className="flex flex-col gap-5 px-4 py-8 md:px-6 md:py-10">
+      <Header fullWidth />
+      <main className="relative w-full grow pb-14">
+        <section className="flex flex-col gap-5 px-2 py-8 md:px-4 md:py-10 lg:px-8 xl:px-10">
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between gap-3">
-              <h1 className="text-balance text-2xl text-foreground md:text-3xl">Incident Dashboard</h1>
+              <h1 className="text-balance text-2xl text-foreground md:text-3xl">
+                Incident Dashboard
+              </h1>
               <Badge variant="secondary" className="border-border bg-card/70 text-foreground">
-                {lastUpdated ? `Updated ${format(lastUpdated, "p")}` : "Awaiting data"}
+                {lastUpdated
+                  ? `${isRefreshing ? "Syncing" : "Updated"} ${format(lastUpdated, "p")}`
+                  : "Awaiting data"}
               </Badge>
             </div>
             <p className="text-muted-foreground text-sm tracking-wide md:text-base">
@@ -228,26 +276,94 @@ export default function EventsAllPage() {
             </p>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-2">
             {[
               { label: "Total events", value: stats.total },
-              { label: "High/Critical", value: stats.critical },
-              { label: "Pending analysis", value: stats.pending },
               { label: "Reports ready", value: stats.reports },
             ].map((item) => (
               <article
                 key={item.label}
                 className="rounded-sm border border-border/80 bg-card/70 px-4 py-3 shadow-sm backdrop-blur"
               >
-                <p className="text-muted-foreground text-xs uppercase tracking-[0.18em]">{item.label}</p>
+                <p className="text-muted-foreground text-xs uppercase tracking-[0.18em]">
+                  {item.label}
+                </p>
                 <p className="mt-2 text-3xl text-foreground">{item.value}</p>
               </article>
             ))}
           </div>
 
           <div className="rounded-sm border border-border/80 bg-card/70 p-4 shadow-sm backdrop-blur">
-            <div className="grid gap-3 lg:grid-cols-5">
-              <div className="flex flex-col gap-1.5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-medium text-foreground">Alert Activity (Live)</h2>
+                <p className="text-muted-foreground text-xs">
+                  Refreshes every {REFRESH_INTERVAL_MS / 1000} seconds from{" "}
+                  <span className="font-mono">/api/events/all</span>.
+                </p>
+              </div>
+              <Badge variant="outline" className="border-border/80">
+                {trendHistory.length} samples
+              </Badge>
+            </div>
+
+            <div className="mt-4 h-72 w-full overflow-x-auto overflow-y-hidden">
+              {trendHistory.length === 0 ? (
+                <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                  Waiting for live alert samples...
+                </div>
+              ) : (
+                <div className="h-full min-w-full" style={{ width: `${chartWidth}px` }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={trendHistory} margin={{ top: 8, right: 8, left: 0, bottom: 12 }}>
+                      <CartesianGrid stroke="hsl(var(--border) / 0.45)" strokeDasharray="4 4" />
+                      <XAxis
+                        dataKey="sampledAtLabel"
+                        minTickGap={20}
+                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                        tickMargin={8}
+                      />
+                      <YAxis
+                        allowDecimals={false}
+                        domain={[0, "auto"]}
+                        tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                        tickCount={6}
+                        width={44}
+                      />
+                      <RechartsTooltip
+                        contentStyle={{
+                          backgroundColor: "hsl(var(--card))",
+                          border: "1px solid hsl(var(--border))",
+                          borderRadius: "6px",
+                        }}
+                        formatter={(value: number) => [value.toLocaleString(), "Alerts"]}
+                        labelStyle={{ color: "hsl(var(--foreground))" }}
+                      />
+                      <Line
+                        dataKey="alerts"
+                        dot={{ fill: "#60a5fa", r: 2 }}
+                        name="Alerts"
+                        stroke="#60a5fa"
+                        strokeWidth={2}
+                        type="monotone"
+                      />
+                      <Brush
+                        dataKey="sampledAtLabel"
+                        endIndex={trendHistory.length - 1}
+                        height={20}
+                        stroke="#60a5fa"
+                        travellerWidth={10}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-sm border border-border/80 bg-card/70 p-4 shadow-sm backdrop-blur">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-12">
+              <div className="flex flex-col gap-1.5 xl:col-span-3">
                 <label className="text-muted-foreground text-xs tracking-wide" htmlFor="start-at">
                   Start
                 </label>
@@ -286,7 +402,7 @@ export default function EventsAllPage() {
                 </Popover>
               </div>
 
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-1.5 xl:col-span-3">
                 <label className="text-muted-foreground text-xs tracking-wide" htmlFor="end-at">
                   End
                 </label>
@@ -320,7 +436,7 @@ export default function EventsAllPage() {
                 </Popover>
               </div>
 
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-1.5 xl:col-span-2">
                 <label className="text-muted-foreground text-xs tracking-wide" htmlFor="row-limit">
                   Rows (max 500)
                 </label>
@@ -334,7 +450,7 @@ export default function EventsAllPage() {
                 />
               </div>
 
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-1.5 xl:col-span-2">
                 <span className="text-muted-foreground text-xs tracking-wide">Sort</span>
                 <div className="flex h-9 min-w-0 rounded-sm border border-input bg-background/75 p-1">
                   <button
@@ -364,7 +480,7 @@ export default function EventsAllPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 items-end gap-2">
+              <div className="grid grid-cols-2 items-end gap-2 md:col-span-2 xl:col-span-2">
                 <Button className="min-w-0 w-full" onClick={applyFilters}>
                   Apply
                 </Button>
@@ -376,7 +492,7 @@ export default function EventsAllPage() {
           </div>
 
           {error ? (
-            <div className="rounded-sm border border-destructive/40 bg-destructive/10 px-4 py-3 text-destructive text-sm">
+            <div className="rounded-sm border border-sky-500/40 bg-sky-500/10 px-4 py-3 text-sky-200 text-sm">
               {error}
             </div>
           ) : null}
@@ -417,9 +533,10 @@ export default function EventsAllPage() {
                       >
                         <td className="px-4 py-3">
                           <div className="text-foreground font-medium">{event.sourceTool}</div>
-                          <div className="text-muted-foreground text-xs">{event.id}</div>
                         </td>
-                        <td className="px-4 py-3 text-muted-foreground">{formatTimestamp(event.timestamp)}</td>
+                        <td className="px-4 py-3 text-muted-foreground">
+                          {formatTimestamp(event.timestamp)}
+                        </td>
                         <td className="px-4 py-3">
                           <Badge variant="outline" className={cn("border", getPriorityTone(event.priority))}>
                             {event.priority}
