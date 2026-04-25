@@ -1,7 +1,6 @@
 import { cn } from "@/lib/utils";
 import { Header } from "@/components/header"; // @efferd/header-2
 import { HeroSection } from "@/components/hero";
-import { LogosSection } from "@/components/logos-section";
 
 export default function page() {
 	return (
@@ -16,7 +15,6 @@ export default function page() {
 				)}
 			>
 				<HeroSection />
-				<LogosSection />
 			</main>
 		</div>
 	);

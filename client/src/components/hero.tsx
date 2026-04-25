@@ -1,8 +1,10 @@
+import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { DecorIcon } from "@/components/ui/decor-icon";
 import { FullWidthDivider } from "@/components/ui/full-width-divider";
 import { Button } from "@/components/ui/button";
-import { ArrowRightIcon, PhoneCallIcon } from "lucide-react";
+import { ArrowRightIcon } from "lucide-react";
+import banninIncidentDashboard from "../../public/bannin-incident-dashboard.jpg";
 
 export function HeroSection() {
 	return (
@@ -50,7 +52,7 @@ export function HeroSection() {
 						"fade-in slide-in-from-bottom-10 animate-in fill-mode-backwards delay-100 duration-500 ease-out"
 					)}
 				>
-					Building Digital Experiences That Drive Growth
+					Simple Security, Smarter Response
 				</h1>
 
 				<p
@@ -59,18 +61,24 @@ export function HeroSection() {
 						"fade-in slide-in-from-bottom-10 animate-in fill-mode-backwards delay-200 duration-500 ease-out"
 					)}
 				>
-					We help brands scale faster through design, <br /> development and
-					strategic execution.
+					Monitor, analyze, and document incidents in one place.
 				</p>
 
 				<div className="fade-in slide-in-from-bottom-10 flex w-fit animate-in items-center justify-center gap-3 fill-mode-backwards pt-2 delay-300 duration-500 ease-out">
-					<Button variant="outline">
-						<PhoneCallIcon data-icon="inline-start" />{" "}
-						Book a Call
+					<Button asChild variant="outline">
+						<a
+							href="https://github.com/Shreehari-Acharya/Bannin"
+							rel="noreferrer"
+							target="_blank"
+						>
+							🐙 GitHub
+						</a>
 					</Button>
-					<Button>
-						Get started{" "}
-						<ArrowRightIcon data-icon="inline-end" />
+					<Button asChild>
+						<Link href="/events/all">
+							Get started{" "}
+							<ArrowRightIcon data-icon="inline-end" />
+						</Link>
 					</Button>
 				</div>
 			</div>
@@ -86,14 +94,14 @@ export function HeroSection() {
 						alt="light app screen"
 						className="dark:hidden"
 						height="auto"
-						src="https://storage.efferd.com/screen/dashboard-light.webp"
+						src={banninIncidentDashboard.src}
 						width="auto"
-					/>
+					/>	
 					<img
 						alt="dark app screen"
 						className="hidden dark:block"
 						height="auto"
-						src="https://storage.efferd.com/screen/dashboard-dark.webp"
+						src={banninIncidentDashboard.src}
 						width="auto"
 					/>
 				</div>
